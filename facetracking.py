@@ -63,7 +63,7 @@ def interpolate_vertices(vertices, num_interpolated_points=10):
     interpolated_vertices.append(vertices[-1])
 
     return np.array(interpolated_vertices)
-def clean_mesh(trimesh_mesh):
+def clean_mesh(trimesh_mesh: trimesh.Trimesh):
     # Remove duplicate vertices
     #trimesh_mesh.remove_duplicate_vertices()
 
@@ -71,7 +71,7 @@ def clean_mesh(trimesh_mesh):
     trimesh_mesh.remove_degenerate_faces()
 
     # Remove duplicate faces
-    trimesh_mesh.remove_duplicate_faces()
+    trimesh_mesh.update_faces(trimesh_mesh.unique_faces())
 
     # Remove zero area faces
     trimesh_mesh.remove_unreferenced_vertices()
@@ -111,8 +111,106 @@ def delaunay_max_distance(vertices, max_distance):
     filtered_vertices = vertices[mask.all(axis=1)]
     tri = Delaunay(filtered_vertices)
     return tri
-        
-def create_head_mesh_from_landmarks(landmarks, scale=1.0, hand=False):
+
+def combine_meshes(meshes):
+    """
+    Combines multiple mesh objects into a single mesh.
+
+    Args:
+        trimesh.Trimesh (list): List of mesh objects.
+
+    Returns:
+        pyrender.Mesh: Combined mesh object.
+    """
+    # Concatenate vertices, normals, and faces
+    vertices = []
+   # normals = []
+    faces = []
+
+    for mesh in meshes:
+        vertices.append(mesh.vertices)
+        #normals.append(mesh.normals)
+        faces.append(mesh.faces + len(vertices) - 1)
+
+    # Convert lists to numpy arrays
+    vertices = np.concatenate(vertices)
+    #normals = np.concatenate(normals)
+    faces = np.concatenate(faces)
+    # Create a new Mesh object
+    combined_mesh = pyrender.Mesh.from_points(vertices)#, normals = normals, faces=faces)
+    return combined_mesh
+
+def create_mesh_between_points(point1, point2, radius=0.03, num_segments=8):
+    """
+    Creates a mesh that extends between two points.
+
+    Args:
+        point1 (array-like): Coordinates of the first point.
+        point2 (array-like): Coordinates of the second point.
+        radius (float): Radius of the cylinder.
+        num_segments (int): Number of segments to use for the cylinder.
+
+    Returns:
+        pyrender.Mesh: Mesh object representing the cylinder.
+    """
+    # Calculate direction vector and length
+    direction = np.array(point2) - np.array(point1)
+    length = np.linalg.norm(direction)  
+
+
+    # Create cylinder vertices
+    circle = np.linspace(0, 2 * np.pi, num_segments, endpoint=False)
+    vertices = np.empty((num_segments * 2, 3))
+
+    # Calculate rotation matrix to align cylinder with direction vector
+    z_axis = np.array([0, 0, 1])
+    if not np.allclose(direction, z_axis):
+        axis = np.cross(z_axis, direction)
+        axis /= np.linalg.norm(axis)
+        angle = np.arccos(np.dot(z_axis, direction) / length)
+        rotation_matrix = rotation_matrix_from_axis_angle(axis, angle)
+    else:
+        rotation_matrix = np.identity(3)
+
+    def _create_ring(vertices, location):
+        # Generate vertices along the cylinder axis
+        for i in range(num_segments):
+            angle = 2 * np.pi * i / num_segments
+            rotated = np.dot(rotation_matrix, np.array([radius * np.cos(angle), radius * np.sin(angle), 0]))
+            vertices[i] = location + rotated - direction / 2
+            vertices[num_segments + i] = location + rotated + direction / 2
+    _create_ring(vertices, point1)
+    _create_ring(vertices, point2)
+    tri = delaunay_max_distance(vertices[:, :2],5)  # Only consider x and y coordinates for 2D triangulation
+    faces = tri.simplices
+    
+
+    return trimesh.Trimesh(vertices, faces)
+
+def rotation_matrix_from_axis_angle(axis, angle):
+    """
+    Generates a rotation matrix from an axis-angle representation.
+
+    Args:
+        axis (array-like): 3D vector representing the rotation axis.
+        angle (float): Angle of rotation in radians.
+
+    Returns:
+        numpy.ndarray: Rotation matrix.
+    """
+    c = np.cos(angle)
+    s = np.sin(angle)
+    t = 1 - c
+    x, y, z = axis / np.linalg.norm(axis)
+    return np.array([
+        [t*x*x + c,    t*x*y - z*s,  t*x*z + y*s],
+        [t*x*y + z*s,  t*y*y + c,    t*y*z - x*s],
+        [t*x*z - y*s,  t*y*z + x*s,  t*z*z + c]
+    ])
+
+
+
+def create_head_mesh_from_landmarks(landmarks, scale=1.0, hand=False, connections=mp_pose_mesh.POSE_CONNECTIONS):
     # Extract coordinates of face landmarks
     vertices = np.array([(lm.x, lm.y, lm.z) for lm in landmarks])
     #vertices = interpolate_vertices(vertices)
@@ -131,26 +229,36 @@ def create_head_mesh_from_landmarks(landmarks, scale=1.0, hand=False):
     # Flip the vertices along the y-axis        
     if not hand:
 
-        # Perform Delaunay triangulation
-        tri = delaunay_max_distance(vertices[:, :2],1)  # Only consider x and y coordinates for 2D triangulation
+                # Perform Delaunay triangulation
+        if len(vertices) >= 4:
+            tri = delaunay_max_distance(vertices[:, :2],5)  # Only consider x and y coordinates for 2D triangulation
 
-        vertices[:, 1] *= -1
+            vertices[:, 1] *= -1
 
 
-        # Extract the indices of the vertices forming the triangles
-        faces = tri.simplices
+            # Extract the indices of the vertices forming the triangles
+            faces = tri.simplices
 
-        # Reverse the order of the faces to maintain the correct orientation
-        faces = np.flip(faces, axis=1)
+            # Reverse the order of the faces to maintain the correct orientation
+            faces = np.flip(faces, axis=1)
 
-        mesh_trimesh = trimesh.Trimesh(vertices=vertices, faces=faces)
+            mesh_trimesh = trimesh.Trimesh(vertices=vertices, faces=faces)
 
-        mesh = clean_mesh(mesh_trimesh)
+            mesh = clean_mesh(mesh_trimesh)
+        else:
+            mesh = pyrender.mesh.Mesh.from_points(vertices, (255,0,0))
     else:
         vertices[:, 1] *= -1
-
-        mesh=pyrender.mesh.Mesh.from_points(vertices, (255,0,0))
-    
+        # Create lines connecting vertices
+        line_mesh = []
+        for connection in connections:
+            try:
+                line_mesh.append(create_mesh_between_points(vertices[connection[0]],vertices[connection[1]]))
+            except Exception as e:
+                print(f"warning: {e}")
+        mesh=[]
+        for i in line_mesh:
+            mesh.append(clean_mesh(i))
     return mesh
 
 
@@ -184,18 +292,18 @@ def track_face():
         results=hand_mesh.process(rgb_frame)
         if results.multi_hand_landmarks:
             for hand_landmarks in results.multi_hand_landmarks:
-                hand_meshx = create_head_mesh_from_landmarks(hand_landmarks.landmark, scale, True)
+                hand_meshx = create_head_mesh_from_landmarks(hand_landmarks.landmark, scale, True, mp_hands_mesh.HAND_CONNECTIONS)
     
-                thingstoadd.append(hand_meshx)
+                thingstoadd.extend(hand_meshx)
         results=pose_mesh.process(rgb_frame)
         if results.pose_landmarks:
             landmarks = results.pose_landmarks.landmark
             l = []
             for ll in landmarks:
                 l.append(land(ll.x,ll.y,ll.z))
-            pose_meshx = create_head_mesh_from_landmarks(l, scale)
+            pose_meshx = create_head_mesh_from_landmarks(l, scale, True)
                 
-            thingstoadd.append(pose_meshx)
+            thingstoadd.extend(pose_meshx)
                 
         scene.mesh_nodes.clear()
         for i in thingstoadd:
