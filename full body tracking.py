@@ -5,6 +5,7 @@ import pyrender
 from mediapipe.python.solutions import face_mesh, drawing_utils, hands, pose
 from scipy.spatial import Delaunay
 import trimesh.transformations as tf
+import bpy
 class land():
    def __init__(self, x, y, z):
         self.x = x
@@ -14,12 +15,14 @@ class land():
 mp_pose_mesh = pose
 mp_face_mesh = face_mesh
 mp_hands_mesh = hands
-maxpeople=5
+maxpeople=1
 pose_mesh=mp_pose_mesh.Pose()
 face_meshh = mp_face_mesh.FaceMesh(static_image_mode=False, max_num_faces=maxpeople, min_detection_confidence=0.5)
 hand_mesh = mp_hands_mesh.Hands(False, maxpeople*2, min_detection_confidence=.5)
 camera_pose=np.eye(4)
 scale=1
+face_data=[] #list of face mesh pyrender.Mesh objects, ex. [pyrender.Mesh, pyrender.Mesh]
+poseandhand_data = [] #list of lists, each containing pyrender.Mesh object, each mesh will be used as a bone ex. [[pyrender.Mesh, pyrender.Mesh], [pyrender.Mesh, pyrender.Mesh]]
 # Load 3D head mesh
 head_mesh = trimesh.load("Head.obj")  
 scene = pyrender.Scene()
@@ -208,9 +211,8 @@ def rotation_matrix_from_axis_angle(axis, angle):
         [t*x*z - y*s,  t*y*z + x*s,  t*z*z + c]
     ])
 
-
-
 def create_head_mesh_from_landmarks(landmarks, scale=1.0, hand=False, connections=mp_pose_mesh.POSE_CONNECTIONS):
+    global poseandhand_data, face_data
     # Extract coordinates of face landmarks
     vertices = np.array([(lm.x, lm.y, lm.z) for lm in landmarks])
     #vertices = interpolate_vertices(vertices)
@@ -243,10 +245,10 @@ def create_head_mesh_from_landmarks(landmarks, scale=1.0, hand=False, connection
             faces = np.flip(faces, axis=1)
 
             mesh_trimesh = trimesh.Trimesh(vertices=vertices, faces=faces)
-
             mesh = clean_mesh(mesh_trimesh)
         else:
             mesh = pyrender.mesh.Mesh.from_points(vertices, (255,0,0))
+            face_data.append(trimesh.Trimesh(vertices))
     else:
         vertices[:, 1] *= -1
         # Create lines connecting vertices
@@ -261,11 +263,8 @@ def create_head_mesh_from_landmarks(landmarks, scale=1.0, hand=False, connection
             mesh.append(clean_mesh(i))
     return mesh
 
-
-
-    
 def track_face():
-    global scene, head_mesh, camera_pose, scale
+    global scene, head_mesh, camera_pose, scale, poseandhand_data
     cap = cv2.VideoCapture(0)
     head_renderer = create_head_renderer(head_mesh)
     
@@ -275,7 +274,7 @@ def track_face():
         
         if not ret:
             break
-        
+        anim=[]
         # Convert the frame to RGB
         rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
         
@@ -295,6 +294,7 @@ def track_face():
                 hand_meshx = create_head_mesh_from_landmarks(hand_landmarks.landmark, scale, True, mp_hands_mesh.HAND_CONNECTIONS)
     
                 thingstoadd.extend(hand_meshx)
+                anim.extend(hand_meshx)
         results=pose_mesh.process(rgb_frame)
         if results.pose_landmarks:
             landmarks = results.pose_landmarks.landmark
@@ -304,6 +304,8 @@ def track_face():
             pose_meshx = create_head_mesh_from_landmarks(l, scale, True)
                 
             thingstoadd.extend(pose_meshx)
+            anim.extend(pose_meshx)
+        poseandhand_data.append(anim)
                 
         scene.mesh_nodes.clear()
         for i in thingstoadd:
@@ -350,5 +352,72 @@ def track_face():
     # Release the camera and close all windows
     cap.release()
     cv2.destroyAllWindows()
+    #print(f"poseandhand_data:\n{poseandhand_data}facialdata:\n{face_data}")
+    
+def create_3d_model_with_animations(face_data, poseandhand_data, output_path):
+    # Create armature
+    bpy.ops.object.armature_add(enter_editmode=False, location=(0, 0, 0))
+    armature_obj = bpy.context.object
+    armature_obj.name = "Armature"
+    poseandhand_data = [o for o in poseandhand_data if o]
+            
+    bpy.ops.object.mode_set(mode='EDIT')
+    for i, frame_data in enumerate(poseandhand_data):
+        for j, mesh in enumerate(frame_data):
+            bbox_min, bbox_max = mesh.bounds
+            bone = armature_obj.data.edit_bones.new(f"Bone_{i}_{j}")
+            bone.head = (bbox_min[0], bbox_min[1], bbox_min[2])
+            bone.tail = (bbox_max[0], bbox_max[1], bbox_max[2])  # Adjust the bone length as needed
+
+    bpy.ops.object.mode_set(mode='OBJECT')
+
+    # Create shape keys for face mesh
+    bpy.ops.mesh.primitive_cube_add(size=2, enter_editmode=False, align='WORLD', location=(0, 0, 0))
+    face_mesh_obj = bpy.context.object
+    bpy.ops.object.mode_set(mode='EDIT')
+    bpy.ops.mesh.delete(type='VERT')
+    bpy.ops.object.mode_set(mode='OBJECT')
+    
+    bpy.context.view_layer.objects.active = face_mesh_obj
+    bpy.ops.object.shape_key_add(from_mix=False)
+    basis_key = face_mesh_obj.data.shape_keys.key_blocks[0]
+    basis_key.name = "Basis"
+    
+    num_frames = len(face_data)
+    for i in range(num_frames):
+        bpy.ops.object.shape_key_add(from_mix=False)
+        frame_key = face_mesh_obj.data.shape_keys.key_blocks[i + 1]
+        frame_key.name = f"Frame_{i}"
+        # Apply vertex positions for each frame
+        verts = face_data[i].vertices
+        for v_index, co in enumerate(verts):
+            face_mesh_obj.data.shape_keys.key_blocks[i + 1].data[v_index].co = co
+
+    # Parent armature to face mesh
+    bpy.context.view_layer.objects.active = face_mesh_obj
+    bpy.ops.object.select_all(action='DESELECT')
+    armature_obj.select_set(True)
+    bpy.context.view_layer.objects.active = armature_obj
+    bpy.ops.object.parent_set(type='OBJECT', keep_transform=True)
+
+    # Set keyframe for each bone at each frame
+    bpy.context.scene.frame_end = num_frames
+    for i, frame_data in enumerate(poseandhand_data):
+        bpy.context.scene.frame_set(i)
+        for j, mesh in enumerate(frame_data):
+            bone_name = f"Bone_{i}_{j}"
+            bbox_min, bbox_max = mesh.bounds
+            translation = (bbox_min[0] + bbox_max[0]) / 2, (bbox_min[1] + bbox_max[1]) / 2, (bbox_min[2] + bbox_max[2]) / 2
+            armature_obj.pose.bones[bone_name].location = translation
+            scale = (bbox_max[0] - bbox_min[0]) / 2, (bbox_max[1] - bbox_min[1]) / 2, (bbox_max[2] - bbox_min[2]) / 2
+            armature_obj.pose.bones[bone_name].scale = scale
+            armature_obj.pose.bones[bone_name].keyframe_insert(data_path="location")
+            armature_obj.pose.bones[bone_name].keyframe_insert(data_path="scale")
+            
+
+    # Export to file
+    bpy.ops.export_scene.fbx(filepath=output_path, use_selection=True)
+
 
 track_face()
+create_3d_model_with_animations(face_data, poseandhand_data, "full body tracking.fbx")
