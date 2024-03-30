@@ -323,11 +323,11 @@ def track_face():
         if key == ord('s'):
             scale -= moveamount  # Move camera forward
             if scale == 0:
-                scale=-1
+                scale=-.01
         elif key == ord('w'):
             scale += moveamount  # Move camera backward
             if scale == 0:
-                scale = 1
+                scale = .01
         #elif key == ord('a'):
         #    camera_pose[0, 3] -= moveamount  # Move camera left
         #elif key == ord('d'):
