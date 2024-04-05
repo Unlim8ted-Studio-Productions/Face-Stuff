@@ -420,4 +420,4 @@ def create_3d_model_with_animations(face_data, poseandhand_data, output_path):
 
 
 track_face()
-create_3d_model_with_animations(face_data, poseandhand_data, "full body tracking.fbx")
+#create_3d_model_with_animations(face_data, poseandhand_data, "full body tracking.fbx")

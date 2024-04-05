@@ -1,42 +1,68 @@
 import tkinter as tk
-import dlib
-import pyautogui
 import cv2
 import math
+import pyautogui
+import mediapipe as mp
 
-# Initialize dlib's face detector and facial landmark predictor
-detector = dlib.get_frontal_face_detector()
-predictor = dlib.shape_predictor("shape_predictor_68_face_landmarks.dat")
+class land():
+   def __init__(self, x, y, z):
+        self.x = x
+        self.y = y
+        self.z = z
 
-# Function to calculate midpoint between two points
-def midpoint(p1, p2):
-    return int((p1.x + p2.x) / 2), int((p1.y + p2.y) / 2)
+# Function to calculate distance between two points
+def distance(p1, p2):
+    return math.sqrt((p2.x - p1.x) ** 2 + (p2.y - p1.y) ** 2)
+
+# Function to check if a hand is in a balled-up position
+def is_hand_balled(hand_landmarks):
+    thumb_tip = hand_landmarks[4]
+    index_tip = hand_landmarks[8]
+    middle_tip = hand_landmarks[12]
+    ring_tip = hand_landmarks[16]
+    pinky_tip = hand_landmarks[20]
+
+    # Calculate distances between finger tips
+    distances = [
+        distance(thumb_tip, index_tip),
+        distance(index_tip, middle_tip),
+        distance(middle_tip, ring_tip),
+        distance(ring_tip, pinky_tip)
+    ]
+
+    # If all fingers are close to the thumb, hand is balled up
+    return all(d < 30 for d in distances)
 
 # Function to calculate angle between three points
 def calculate_angle(p1, p2, p3):
     radians = math.atan2(p3.y - p2.y, p3.x - p2.x) - math.atan2(p1.y - p2.y, p1.x - p2.x)
     return math.degrees(radians)
 
-# Function to calculate dot position based on eye landmarks and screen dimensions
-def calculate_dot_position(left_eye_landmarks, right_eye_landmarks, screen_width, screen_height):
-    # Define landmarks for eye angle calculation
-    left_eye_angle_landmarks = [36, 37, 38, 39, 40, 41]
-    right_eye_angle_landmarks = [42, 43, 44, 45, 46, 47]
+# Function to calculate dot position based on hand landmarks and screen dimensions
+def calculate_dot_position(hand_landmarks, screen_width, screen_height):
+    # Define landmarks for hand angle calculation
+    index_finger_tip = hand_landmarks[8]
+    middle_finger_tip = hand_landmarks[12]
+    wrist = hand_landmarks[0]
 
-    # Calculate the angle of each eye
-    left_eye_angle = calculate_angle(left_eye_landmarks[0], left_eye_landmarks[3], left_eye_landmarks[5])
-    right_eye_angle = calculate_angle(right_eye_landmarks[0], right_eye_landmarks[3], right_eye_landmarks[5])
+    # Calculate the angle of the hand
+    angle = calculate_angle(index_finger_tip, middle_finger_tip, wrist)
 
-    # Calculate the average of the angles
-    average_angle = (left_eye_angle + right_eye_angle) / 2
-
-    # Convert average angle to screen coordinates
-    dot_x = int((average_angle / 180) * screen_width)
+    # Convert angle to screen coordinates
+    dot_x = int((angle / 180) * screen_width)
     dot_y = int((0.5 * screen_height))  # Y-coordinate remains at the center of the screen
 
     return dot_x, dot_y
 
-def detect_eyes():
+
+def Landmark2List(landmarks):
+    landmarks = landmarks.landmark
+    l = []
+    for ll in landmarks:
+        l.append(land(ll.x,ll.y,ll.z))
+    return l
+        
+def detect_hand():
     root = tk.Tk()
     root.attributes("-topmost", True)
     root.attributes("-transparent", "blue")
@@ -49,25 +75,37 @@ def detect_eyes():
 
     dot = dot_canvas.create_oval(0, 0, 0, 0, outline='red', width=2)
 
+    mp_hands = mp.solutions.hands
+    hands = mp_hands.Hands()
     cap = cv2.VideoCapture(0)
+
+    is_dragging = False
+    is_right_click = False
 
     while True:
         ret, frame = cap.read()
         if not ret:
             break
 
-        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-        faces = detector(gray)
+        frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+        results = hands.process(frame_rgb)
 
-        for face in faces:
-            landmarks = predictor(gray, face)
-            left_eye_landmarks = [landmarks.part(i) for i in range(36, 42)]
-            right_eye_landmarks = [landmarks.part(i) for i in range(42, 48)]
+        if results.multi_hand_landmarks:
+            for hand_landmarks in results.multi_hand_landmarks:
+                if is_hand_balled(hand_landmarks.landmark):
+                    # Click when hand is balled up
+                    pyautogui.click()
 
-            dot_x, dot_y = calculate_dot_position(left_eye_landmarks, right_eye_landmarks, screen_width, screen_height)
-            pyautogui.moveTo(dot_x, dot_y)
+                dot_x, dot_y = calculate_dot_position(hand_landmarks.landmark, screen_width, screen_height)
+                pyautogui.moveTo(dot_x, dot_y)
 
-            dot_canvas.coords(dot, dot_x-5, dot_y-5, dot_x+5, dot_y+5)
+                dot_canvas.coords(dot, dot_x - 5, dot_y - 5, dot_x + 5, dot_y + 5)
+
+                if is_dragging:
+                    pyautogui.dragTo(dot_x, dot_y)
+
+                if is_right_click:
+                    pyautogui.rightClick()
 
         root.update()
 
@@ -76,4 +114,4 @@ def detect_eyes():
     root.mainloop()
 
 if __name__ == "__main__":
-    detect_eyes()
+    detect_hand()
