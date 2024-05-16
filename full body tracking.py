@@ -16,13 +16,15 @@ mp_pose_mesh = pose
 mp_face_mesh = face_mesh
 mp_hands_mesh = hands
 maxpeople=1
-pose_mesh=mp_pose_mesh.Pose()
+pose_mesh=mp_pose_mesh.Pose(model_complexity=1)
 face_meshh = mp_face_mesh.FaceMesh(static_image_mode=False, max_num_faces=maxpeople, min_detection_confidence=0.5)
 hand_mesh = mp_hands_mesh.Hands(False, maxpeople*2, min_detection_confidence=.5)
 camera_pose=np.eye(4)
 scale=1
-face_data=[] #list of face mesh pyrender.Mesh objects, ex. [pyrender.Mesh, pyrender.Mesh]
-poseandhand_data = [] #list of lists, each containing pyrender.Mesh object, each mesh will be used as a bone ex. [[pyrender.Mesh, pyrender.Mesh], [pyrender.Mesh, pyrender.Mesh]]
+face_data=[] #list of face mesh pyrender.Mesh objects with each index being one frame, ex. [pyrender.Mesh, pyrender.Mesh]
+poseandhand_data = [] #list of lists, each containing pyrender.Mesh object, the lists contain in the list are each for one frame and each of the mesh objects in the frames will be used as a bone, ex. [[pyrender.Mesh, pyrender.Mesh], [pyrender.Mesh, pyrender.Mesh]]
+#TODO: figure out how to take this information and make it into a blender scene with a fully animated body rig.
+
 # Load 3D head mesh
 head_mesh = trimesh.load("Head.obj")  
 scene = pyrender.Scene()
@@ -71,7 +73,7 @@ def clean_mesh(trimesh_mesh: trimesh.Trimesh):
     #trimesh_mesh.remove_duplicate_vertices()
 
     # Remove degenerate faces
-    trimesh_mesh.remove_degenerate_faces()
+    trimesh_mesh.update_faces(trimesh_mesh.nondegenerate_faces())
 
     # Remove duplicate faces
     trimesh_mesh.update_faces(trimesh_mesh.unique_faces())
@@ -370,7 +372,6 @@ def create_3d_model_with_animations(face_data, poseandhand_data, output_path):
             bone.tail = (bbox_max[0], bbox_max[1], bbox_max[2])  # Adjust the bone length as needed
 
     bpy.ops.object.mode_set(mode='OBJECT')
-
     # Create shape keys for face mesh
     bpy.ops.mesh.primitive_cube_add(size=2, enter_editmode=False, align='WORLD', location=(0, 0, 0))
     face_mesh_obj = bpy.context.object
@@ -412,7 +413,7 @@ def create_3d_model_with_animations(face_data, poseandhand_data, output_path):
             scale = (bbox_max[0] - bbox_min[0]) / 2, (bbox_max[1] - bbox_min[1]) / 2, (bbox_max[2] - bbox_min[2]) / 2
             armature_obj.pose.bones[bone_name].scale = scale
             armature_obj.pose.bones[bone_name].keyframe_insert(data_path="location")
-            armature_obj.pose.bones[bone_name].keyframe_insert(data_path="scale")
+            armature_obj.pose.bones[bone_name].keyframe_insert(data_path="scale")   
             
 
     # Export to file
