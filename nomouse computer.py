@@ -6,7 +6,6 @@ import pygame
 import pydirectinput
 import pyaudio
 import vosk
-import sys
 
 # Initialize Vosk recognizer
 #model_path = "voskmodel"
@@ -123,9 +122,8 @@ def main():
     
     # Initialize webcam
     cap = cv2.VideoCapture(0)
-    # Set webcam frame size to match display resolution
-    cap.set(cv2.CAP_PROP_FRAME_WIDTH, display_width)
-    cap.set(cv2.CAP_PROP_FRAME_HEIGHT, display_height)
+    # Set webcam frame size to match display resolutionimport ctypes
+
     leftclick=False
     rightclick=False
     scroll  = False
@@ -143,7 +141,9 @@ def main():
         
         # Get hand landmarks from webcam
         _, frame = cap.read()
+        frame=cv2.resize(frame, (display_width, display_height)) 
         landmarks = get_hand_landmarks(frame)
+       # cv2.imshow('',frame)
 
         # Draw or erase based on hand position
         if landmarks:
