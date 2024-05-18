@@ -17,6 +17,7 @@ stream = mic.open(format=pyaudio.paInt16, channels=1, rate=16000, input=True, fr
 stream.start_stream()
 pygame.init()
 pydirectinput.PAUSE= 0
+pydirectinput.FAILSAFE=False
 # Initialize MediaPipe Hands model
 mp_hands = mp.solutions.hands
 hands = mp_hands.Hands(static_image_mode=False, max_num_hands=1, model_complexity=1)
